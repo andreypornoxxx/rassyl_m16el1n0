@@ -1,0 +1,4 @@
+python-telegram-bot==21.6
+telethon
+pandas
+psycopg2-binary==2.9.9
