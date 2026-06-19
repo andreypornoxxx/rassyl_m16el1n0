@@ -1,2 +1,4 @@
 python-telegram-bot==21.6
+telethon
+pandas
 pg8000==1.31.2
