@@ -1,11 +1,11 @@
 import os
-from datetime import datetime
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
     import pg8000.native
     import urllib.parse
+    import re
 
     def db_connect():
         r = urllib.parse.urlparse(DATABASE_URL)
@@ -18,10 +18,17 @@ if DATABASE_URL:
             ssl_context=True,
         )
 
+    def _to_pg(q):
+        i = 0
+        def repl(m):
+            nonlocal i
+            i += 1
+            return f"${i}"
+        return re.sub(r'\?|%s', repl, q)
+
     def fetchall(q, p=()):
-        q = q.replace("?", "%s")
         con = db_connect()
-        rows = con.run(q, *list(p))
+        rows = con.run(_to_pg(q), *list(p))
         cols = [c["name"] for c in con.columns]
         con.close()
         return [dict(zip(cols, r)) for r in rows]
@@ -31,10 +38,9 @@ if DATABASE_URL:
         return rows[0] if rows else None
 
     def execute(q, p=()):
-        q = q.replace("?", "%s")
         con = db_connect()
         try:
-            rows = con.run(q, *list(p))
+            rows = con.run(_to_pg(q), *list(p))
             result = rows[0][0] if rows else None
         except Exception:
             result = None
@@ -45,7 +51,7 @@ else:
     import sqlite3
 
     def db_connect():
-        con = sqlite3.connect("broadcast.db")
+        con = sqlite3.connect("shop.db")
         con.row_factory = sqlite3.Row
         return con
 
@@ -74,110 +80,48 @@ def db_init():
     if DATABASE_URL:
         con = db_connect()
         for q in [
+            """CREATE TABLE IF NOT EXISTS products (
+                id          SERIAL PRIMARY KEY,
+                name        TEXT    NOT NULL,
+                description TEXT    NOT NULL,
+                price_stars INTEGER NOT NULL,
+                content     TEXT,
+                file_id     TEXT,
+                file_name   TEXT,
+                active      INTEGER DEFAULT 1
+            )""",
+            """CREATE TABLE IF NOT EXISTS sales (
+                id         SERIAL PRIMARY KEY,
+                user_id    BIGINT,
+                product_id INTEGER,
+                stars      INTEGER,
+                ts         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
             """CREATE TABLE IF NOT EXISTS subscriptions (
-                user_id  BIGINT PRIMARY KEY,
-                username TEXT,
-                plan     TEXT,
-                sub_end  TIMESTAMP
-            )""",
-            """CREATE TABLE IF NOT EXISTS accounts (
-                id        SERIAL PRIMARY KEY,
-                user_id   BIGINT NOT NULL,
-                phone     TEXT   NOT NULL,
-                label     TEXT,
-                active    INTEGER DEFAULT 1,
-                UNIQUE(user_id, phone)
-            )""",
-            """CREATE TABLE IF NOT EXISTS active_account (
-                user_id BIGINT PRIMARY KEY,
-                phone   TEXT
-            )""",
-            """CREATE TABLE IF NOT EXISTS broadcasts (
-                id      SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                phone   TEXT,
-                total   INTEGER,
-                ok      INTEGER,
-                fail    INTEGER,
-                ts      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                user_id     BIGINT PRIMARY KEY,
+                username    TEXT,
+                plan        TEXT,
+                sub_end     TIMESTAMP,
+                activated   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""",
         ]:
             con.run(q)
         con.close()
     else:
         con = db_connect()
-        con.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
-            user_id INTEGER PRIMARY KEY, username TEXT, plan TEXT, sub_end DATETIME
-        )""")
-        con.execute("""CREATE TABLE IF NOT EXISTS accounts (
+        con.execute("""CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL, phone TEXT NOT NULL, label TEXT, active INTEGER DEFAULT 1,
-            UNIQUE(user_id, phone)
+            name TEXT NOT NULL, description TEXT NOT NULL, price_stars INTEGER NOT NULL,
+            content TEXT, file_id TEXT, file_name TEXT, active INTEGER DEFAULT 1
         )""")
-        con.execute("""CREATE TABLE IF NOT EXISTS active_account (
-            user_id INTEGER PRIMARY KEY, phone TEXT
-        )""")
-        con.execute("""CREATE TABLE IF NOT EXISTS broadcasts (
+        con.execute("""CREATE TABLE IF NOT EXISTS sales (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER, phone TEXT, total INTEGER, ok INTEGER, fail INTEGER,
+            user_id INTEGER, product_id INTEGER, stars INTEGER,
             ts DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""")
+        con.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
+            user_id INTEGER PRIMARY KEY, username TEXT, plan TEXT,
+            sub_end DATETIME, activated DATETIME DEFAULT CURRENT_TIMESTAMP
         )""")
         con.commit()
         con.close()
-
-
-def is_subscribed(user_id: int) -> bool:
-    row = fetchone("SELECT sub_end FROM subscriptions WHERE user_id=%s", (user_id,))
-    if not row:
-        return False
-    return datetime.fromisoformat(str(row["sub_end"])) > datetime.now()
-
-def get_accounts(user_id: int):
-    return fetchall("SELECT * FROM accounts WHERE user_id=%s AND active=1", (user_id,))
-
-def add_account(user_id: int, phone: str, label: str):
-    if DATABASE_URL:
-        execute("""
-            INSERT INTO accounts (user_id, phone, label)
-            VALUES (%s,%s,%s)
-            ON CONFLICT(user_id, phone) DO UPDATE SET label=EXCLUDED.label, active=1
-        """, (user_id, phone, label))
-    else:
-        execute("""
-            INSERT OR REPLACE INTO accounts (user_id, phone, label, active)
-            VALUES (?,?,?,1)
-        """, (user_id, phone, label))
-
-def remove_account(user_id: int, phone: str):
-    if DATABASE_URL:
-        execute("UPDATE accounts SET active=0 WHERE user_id=%s AND phone=%s", (user_id, phone))
-    else:
-        execute("UPDATE accounts SET active=0 WHERE user_id=? AND phone=?", (user_id, phone))
-
-def get_active_phone(user_id: int):
-    if DATABASE_URL:
-        row = fetchone("SELECT phone FROM active_account WHERE user_id=%s", (user_id,))
-    else:
-        row = fetchone("SELECT phone FROM active_account WHERE user_id=?", (user_id,))
-    return row["phone"] if row else None
-
-def set_active_phone(user_id: int, phone: str):
-    if DATABASE_URL:
-        execute("""
-            INSERT INTO active_account (user_id, phone) VALUES (%s,%s)
-            ON CONFLICT(user_id) DO UPDATE SET phone=EXCLUDED.phone
-        """, (user_id, phone))
-    else:
-        execute("INSERT OR REPLACE INTO active_account (user_id, phone) VALUES (?,?)", (user_id, phone))
-
-def log_broadcast(user_id, phone, total, ok, fail):
-    if DATABASE_URL:
-        execute(
-            "INSERT INTO broadcasts (user_id,phone,total,ok,fail) VALUES(%s,%s,%s,%s,%s)",
-            (user_id, phone, total, ok, fail)
-        )
-    else:
-        execute(
-            "INSERT INTO broadcasts (user_id,phone,total,ok,fail) VALUES(?,?,?,?,?)",
-            (user_id, phone, total, ok, fail)
-        )
