@@ -21,12 +21,21 @@ from telethon.errors import (
     PhoneCodeExpiredError, PasswordHashInvalidError, FloodWaitError,
 )
 
-import config, db
+import db
+
+BOT_TOKEN   = os.getenv("BOT_TOKEN")
+API_ID      = int(os.getenv("API_ID", "0"))
+API_HASH    = os.getenv("API_HASH", "")
+SESSION_DIR = os.getenv("SESSION_DIR", "sessions")
+
+API_ID       = int(os.getenv("API_ID", "0"))
+API_HASH     = os.getenv("API_HASH", "")
+SESSION_DIR  = os.getenv("SESSION_DIR", "sessions")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SESSION_DIR = config.SESSION_DIR
+
 os.makedirs(SESSION_DIR, exist_ok=True)
 
 # ── States ────────────────────────────────────────────────────────────────────
@@ -93,8 +102,8 @@ async def get_client(user_id: int, phone: str) -> TelegramClient:
     if phone not in clients[user_id]:
         client = TelegramClient(
             session_path(user_id, phone),
-            config.API_ID,
-            config.API_HASH,
+            API_ID,
+            API_HASH,
         )
         await client.connect()
         clients[user_id][phone] = client
@@ -337,7 +346,7 @@ async def wait_phone(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     state   = get_state(user_id)
     state["_auth_phone"] = phone
 
-    client = TelegramClient(session_path(user_id, phone), config.API_ID, config.API_HASH)
+    client = TelegramClient(session_path(user_id, phone), API_ID, API_HASH)
     await client.connect()
 
     if user_id not in clients:
@@ -523,7 +532,7 @@ async def confirm_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> i
 def main():
     db.db_init()
 
-    app = Application.builder().token(config.BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
