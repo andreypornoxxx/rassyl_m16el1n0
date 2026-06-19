@@ -21,7 +21,7 @@ if DATABASE_URL:
     def fetchall(q, p=()):
         q = q.replace("?", "%s")
         con = db_connect()
-        rows = con.run(q, *p)
+        rows = con.run(q, *list(p))
         cols = [c["name"] for c in con.columns]
         con.close()
         return [dict(zip(cols, r)) for r in rows]
@@ -33,9 +33,13 @@ if DATABASE_URL:
     def execute(q, p=()):
         q = q.replace("?", "%s")
         con = db_connect()
-        rows = con.run(q, *p)
+        try:
+            rows = con.run(q, *list(p))
+            result = rows[0][0] if rows else None
+        except Exception:
+            result = None
         con.close()
-        return rows[0][0] if rows else None
+        return result
 
 else:
     import sqlite3
@@ -123,19 +127,19 @@ def db_init():
 
 
 def is_subscribed(user_id: int) -> bool:
-    row = fetchone("SELECT sub_end FROM subscriptions WHERE user_id=?", (user_id,))
+    row = fetchone("SELECT sub_end FROM subscriptions WHERE user_id=%s", (user_id,))
     if not row:
         return False
     return datetime.fromisoformat(str(row["sub_end"])) > datetime.now()
 
 def get_accounts(user_id: int):
-    return fetchall("SELECT * FROM accounts WHERE user_id=? AND active=1", (user_id,))
+    return fetchall("SELECT * FROM accounts WHERE user_id=%s AND active=1", (user_id,))
 
 def add_account(user_id: int, phone: str, label: str):
     if DATABASE_URL:
         execute("""
             INSERT INTO accounts (user_id, phone, label)
-            VALUES (?,?,?)
+            VALUES (%s,%s,%s)
             ON CONFLICT(user_id, phone) DO UPDATE SET label=EXCLUDED.label, active=1
         """, (user_id, phone, label))
     else:
@@ -145,25 +149,35 @@ def add_account(user_id: int, phone: str, label: str):
         """, (user_id, phone, label))
 
 def remove_account(user_id: int, phone: str):
-    execute("UPDATE accounts SET active=0 WHERE user_id=? AND phone=?", (user_id, phone))
+    if DATABASE_URL:
+        execute("UPDATE accounts SET active=0 WHERE user_id=%s AND phone=%s", (user_id, phone))
+    else:
+        execute("UPDATE accounts SET active=0 WHERE user_id=? AND phone=?", (user_id, phone))
 
 def get_active_phone(user_id: int):
-    row = fetchone("SELECT phone FROM active_account WHERE user_id=?", (user_id,))
+    if DATABASE_URL:
+        row = fetchone("SELECT phone FROM active_account WHERE user_id=%s", (user_id,))
+    else:
+        row = fetchone("SELECT phone FROM active_account WHERE user_id=?", (user_id,))
     return row["phone"] if row else None
 
 def set_active_phone(user_id: int, phone: str):
     if DATABASE_URL:
         execute("""
-            INSERT INTO active_account (user_id, phone) VALUES (?,?)
+            INSERT INTO active_account (user_id, phone) VALUES (%s,%s)
             ON CONFLICT(user_id) DO UPDATE SET phone=EXCLUDED.phone
         """, (user_id, phone))
     else:
-        execute("""
-            INSERT OR REPLACE INTO active_account (user_id, phone) VALUES (?,?)
-        """, (user_id, phone))
+        execute("INSERT OR REPLACE INTO active_account (user_id, phone) VALUES (?,?)", (user_id, phone))
 
 def log_broadcast(user_id, phone, total, ok, fail):
-    execute(
-        "INSERT INTO broadcasts (user_id,phone,total,ok,fail) VALUES(?,?,?,?,?)",
-        (user_id, phone, total, ok, fail)
-    )
+    if DATABASE_URL:
+        execute(
+            "INSERT INTO broadcasts (user_id,phone,total,ok,fail) VALUES(%s,%s,%s,%s,%s)",
+            (user_id, phone, total, ok, fail)
+        )
+    else:
+        execute(
+            "INSERT INTO broadcasts (user_id,phone,total,ok,fail) VALUES(?,?,?,?,?)",
+            (user_id, phone, total, ok, fail)
+        )
